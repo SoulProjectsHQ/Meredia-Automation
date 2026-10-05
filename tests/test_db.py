@@ -3,7 +3,7 @@ import sqlite3
 import unittest
 
 from src.crm.db import SCHEMA_PATH, connect, init_db
-from src.crm.models import LeadStatus
+from src.crm.models import InteractionKind, LeadStatus
 from src.email.status import EmailKind, EmailStatus
 
 TABLES = {"company", "contact", "lead", "interaction", "email", "task", "research_source"}
@@ -91,6 +91,9 @@ class SchemaMatchesCodeTests(unittest.TestCase):
 
     def test_email_kinds(self):
         self.assertEqual(self.check_values("email", "kind"), {k.value for k in EmailKind})
+
+    def test_interaction_kinds(self):
+        self.assertEqual(self.check_values("interaction", "kind"), {k.value for k in InteractionKind})
 
 
 if __name__ == "__main__":

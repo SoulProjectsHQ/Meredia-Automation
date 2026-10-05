@@ -70,7 +70,10 @@ CREATE TABLE IF NOT EXISTS email (
     approved_by      TEXT,
     approved_at      TEXT,
     sent_at          TEXT,
-    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- A mail can only be APPROVED or SENT with a named approver, and SENT needs a send time.
+    CHECK (status = 'DRAFT' OR approved_by IS NOT NULL),
+    CHECK (status != 'SENT' OR sent_at IS NOT NULL)
 );
 
 CREATE TABLE IF NOT EXISTS task (

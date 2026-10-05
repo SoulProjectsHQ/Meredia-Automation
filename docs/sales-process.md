@@ -14,7 +14,12 @@ Fasene holdes separert i koden. Hver fase er en egen modul under `src/`.
 
 `NEW`, `RESEARCHED`, `QUALIFIED`, `READY_TO_CONTACT`, `CONTACTED`, `FOLLOWUP_1`, `FOLLOWUP_2`, `REPLIED`, `INTERESTED`, `MEETING`, `PROPOSAL`, `WON`, `LOST`, `DO_NOT_CONTACT`.
 
-Ikke opprett egne statuser uten god grunn. Tillatte overganger ligger i `src/crm/status.py`. Alle åpne statuser kan gå til `LOST` eller `DO_NOT_CONTACT`. `DO_NOT_CONTACT` er endelig.
+Ikke opprett egne statuser uten god grunn. Tillatte overganger ligger i `src/crm/status.py`. Nye leads starter alltid som `NEW`. Alle åpne statuser kan gå til `LOST` eller `DO_NOT_CONTACT`. `DO_NOT_CONTACT` er endelig.
+
+Krav til data for å nå en status (sjekkes i `src/crm/repository.py`):
+
+- `QUALIFIED` og `READY_TO_CONTACT` krever `lead_score`.
+- `READY_TO_CONTACT` krever en bekreftet `contact_email`. Endres e-postadressen, må den bekreftes på nytt.
 
 ## Oppfølging
 
@@ -40,7 +45,9 @@ Datamodellen (`src/crm/schema.sql`) har tabellene `company`, `contact`, `lead`, 
 
 ## Duplikater
 
-Før et nytt lead legges inn, sjekk organisasjonsnummer, domene, selskapsnavn og tidligere kontakt. Organisasjonsnummer er primær identifikator. Ikke kontakt samme bedrift flere ganger fordi den finnes fra flere kilder. Se `src/crm/dedupe.py`.
+Før et nytt lead legges inn, sjekk organisasjonsnummer, domene, selskapsnavn og tidligere kontakt. Organisasjonsnummer er primær identifikator. Ikke kontakt samme bedrift flere ganger fordi den finnes fra flere kilder. Se `src/crm/dedupe.py`. Repositoryet kjører sjekken ved hver innlegging og ved endring av org.nr, nettside eller navn. Avsluttede leads (`LOST`, `DO_NOT_CONTACT`) blokkerer også, så samme bedrift kontaktes ikke på nytt.
+
+`add_interaction` oppdaterer `last_contact_date` for alt unntatt notater.
 
 ## Kontrollpunkter (human-in-the-loop)
 

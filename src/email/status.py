@@ -9,6 +9,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 
+from src.crm.approval import require_human_approver
+
 
 class EmailStatus(StrEnum):
     DRAFT = "DRAFT"
@@ -21,9 +23,6 @@ class EmailKind(StrEnum):
     FOLLOWUP_1 = "followup_1"
     FOLLOWUP_2 = "followup_2"
 
-
-# Identities that are not a human approver.
-NON_HUMAN_APPROVERS = frozenset({"ai", "llm", "claude", "system", "automation", "bot"})
 
 
 @dataclass(frozen=True)
@@ -44,9 +43,7 @@ class EmailRecord:
 def approve(record: EmailRecord, approved_by: str, now: datetime) -> EmailRecord:
     if record.status != EmailStatus.DRAFT:
         raise ValueError(f"Only a DRAFT can be approved, status is {record.status}")
-    approver = (approved_by or "").strip()
-    if not approver or approver.lower() in NON_HUMAN_APPROVERS:
-        raise ValueError("Approval requires a named human approver")
+    approver = require_human_approver(approved_by)
     return replace(record, status=EmailStatus.APPROVED, approved_by=approver, approved_at=now)
 
 

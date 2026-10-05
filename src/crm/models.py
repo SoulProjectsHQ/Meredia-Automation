@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 
 
@@ -22,6 +22,24 @@ class LeadStatus(StrEnum):
     WON = "WON"
     LOST = "LOST"
     DO_NOT_CONTACT = "DO_NOT_CONTACT"
+
+
+class InteractionKind(StrEnum):
+    EMAIL_SENT = "email_sent"
+    REPLY = "reply"
+    CALL = "call"
+    MEETING = "meeting"
+    NOTE = "note"
+
+
+@dataclass(frozen=True)
+class ResearchSource:
+    """Where a finding came from. Every research result should point to at least one."""
+
+    url: str
+    source_type: str | None = None
+    retrieved_at: datetime | None = None
+    note: str | None = None
 
 
 @dataclass

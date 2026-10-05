@@ -16,7 +16,7 @@ DISCOVER -> RESEARCH -> VALIDATE -> SCORE -> QUALIFY -> FIND CONTACT
 
 | Mappe | Innhold | Status |
 | --- | --- | --- |
-| `src/crm` | modeller, validering, duplikater, statusoverganger, SQLite-skjema | ferdig kjerne |
+| `src/crm` | modeller, validering, duplikater, statusoverganger, SQLite-skjema, lead-repository, eksport | ferdig |
 | `src/scoring` | lead score 0 til 100 | ferdig |
 | `src/email` | e-poststatus, oppfølgingsdatoer, mailregler | ferdig kjerne |
 | `src/automation` | feilklasser, pipeline-logg | ferdig kjerne |

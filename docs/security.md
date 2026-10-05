@@ -29,6 +29,14 @@ Se listen i `docs/sales-process.md`. Automatisering kan støtte disse stegene, m
 
 Data i `data/` og `logs/` ligger utenfor git.
 
+### Sletting og eksport
+
+- `delete_lead` krever et navngitt menneske og returnerer en kvittering med id-er, uten persondata, som kalleren logger.
+- Selskapet, kontaktene og kildene slettes sammen med leadet, med mindre selskapet har andre leads.
+- Leads med `DO_NOT_CONTACT` slettes ikke. De er sperren som hindrer ny kontakt.
+- E-poster kan ikke lagres som `APPROVED` eller `SENT` uten godkjenner. Databasen avviser det.
+- CSV-eksport nøytraliserer celler som starter med `=`, `+`, `-` eller `@`, slik at innhold fra research ikke kjøres som formler i regneark. Eksporter hører hjemme i `data/`.
+
 ## Feilhåndtering
 
 Feil klassifiseres som `temporary_error`, `validation_error`, `authentication_error`, `rate_limit`, `external_service_error` eller `internal_error` (`src/automation/errors.py`). Midlertidige feil, rate limit og eksterne tjenestefeil kan prøves på nytt. Validering, autentisering og interne feil stopper kjøringen. Automatisering skal ikke fortsette ukritisk etter feil.

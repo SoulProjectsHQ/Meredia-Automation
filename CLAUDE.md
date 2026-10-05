@@ -36,6 +36,10 @@ Disse handlingene krever et menneske, og kontrollpunktene fjernes ikke uten eksp
 
 En AI-generert mail er alltid `DRAFT`. Den blir aldri automatisk `APPROVED`.
 
+## CRM
+
+Alle lesing og skriving mot CRM går gjennom `LeadRepository` (`src/crm/repository.py`). Ikke skriv SQL mot tabellene fra andre moduler. Statusendring bare via `change_status`. Sletting krever navngitt menneske via `delete_lead`.
+
 ## Sikkerhet
 
 - Aldri API-nøkler, passord, OAuth secrets, tokens eller databasepassord i kode. Bruk miljøvariabler. Nye variabler legges i `.env.example` uten verdier.
@@ -52,7 +56,7 @@ Modulær. Ikke ett stort script. Fasene holdes separert i koden.
 src/research       research og nettsideanalyse
 src/prospecting    discovery og kvalifisering
 src/scoring        lead score
-src/crm            modeller, validering, duplikater, statuser, database
+src/crm            modeller, validering, duplikater, statuser, database, repository, eksport
 src/email          utkast, status, regler, oppfølgingsdatoer
 src/integrations   Outlook/Graph, Gmail, Brønnøysund, med mockbare grensesnitt
 src/automation     pipeline, feilklasser, logging
