@@ -58,7 +58,7 @@ src/prospecting    discovery og kvalifisering
 src/scoring        lead score
 src/crm            modeller, validering, duplikater, statuser, database, repository, eksport
 src/email          utkast, status, regler, oppfølgingsdatoer
-src/integrations   Outlook/Graph, Gmail, Brønnøysund, med mockbare grensesnitt
+src/integrations   Gmail, Brønnøysund, med mockbare grensesnitt
 src/automation     pipeline, feilklasser, logging
 src/dashboard      internt dashboard
 prompts/           alle prompts, versjonert, aldri spredt i kode

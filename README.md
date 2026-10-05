@@ -22,7 +22,7 @@ DISCOVER -> RESEARCH -> VALIDATE -> SCORE -> QUALIFY -> FIND CONTACT
 | `src/automation` | feilklasser, pipeline-logg | ferdig kjerne |
 | `src/research` | research og nettsideanalyse | ikke startet |
 | `src/prospecting` | discovery og kvalifisering | ikke startet |
-| `src/integrations` | Graph, Gmail, Brønnøysund | ikke startet |
+| `src/integrations` | Gmail, Brønnøysund | ikke startet |
 | `src/dashboard` | internt dashboard | ikke startet |
 | `prompts/` | versjonerte prompts | første versjon |
 | `docs/` | forretningsregler og sikkerhet | første versjon |
@@ -57,7 +57,7 @@ Ikke avgjort. Se `TODO.md`.
 
 ## Integrasjoner
 
-Ingen er koblet til ennå. Planlagt: Microsoft Graph eller Gmail (kun utkast i første omgang), Brønnøysundregistrene. Alle integrasjoner skal kunne mockes.
+Ingen er koblet til ennå. Planlagt: Gmail med Google Workspace (kun utkast i første omgang), Brønnøysundregistrene. Alle integrasjoner skal kunne mockes.
 
 ## Sikkerhet
 

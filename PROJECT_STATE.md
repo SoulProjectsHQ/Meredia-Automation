@@ -26,6 +26,7 @@ Sist oppdatert: 2026-10-05
 - Nye leads starter alltid som `NEW`. `QUALIFIED` og `READY_TO_CONTACT` krever score. `READY_TO_CONTACT` krever bekreftet e-post.
 - `DO_NOT_CONTACT`-leads slettes aldri, fordi de hindrer ny kontakt.
 - Databasen avviser `APPROVED`- og `SENT`-mail uten godkjenner.
+- E-postintegrasjon blir Gmail med Google Workspace (besluttet av Aleksander). Ingen Graph.
 
 ## Ikke startet
 

@@ -22,7 +22,8 @@ Prioritert. Øverste uferdige oppgave tas først.
 
 ## 4. E-postintegrasjon, kun DRAFT
 
-- Graph eller Gmail. Først bare opprette utkast.
+- Gmail API med Google Workspace (besluttet). Først bare opprette utkast i Gmail.
+- Gmail-scopes: verifiser mot Google-dokumentasjonen når vi bygger. Så vidt jeg vet kan et scope som oppretter utkast også sende, så "bare utkast" må sikres i koden og med `EMAIL_SENDING_ENABLED`, ikke bare med rettigheter.
 - Utsending krever `EMAIL_SENDING_ENABLED=true` og en `APPROVED`-mail.
 - Logg mottaker, tidspunkt, lead-ID, promptversjon, status og message ID.
 
@@ -42,9 +43,10 @@ Koble `prompts/classify-response.md` til CRM. Menneske bekrefter statusendring.
 ## Åpne spørsmål til Aleksander
 
 1. Er Python greit som språk, eller vil du ha TypeScript?
-2. Graph (Outlook) eller Gmail som første e-postintegrasjon?
-3. Skal mailutkast ligge i Outlook/Gmail-utkast eller i egen database?
-4. Hva skal dashboardet bygges med, og hvor skal det kjøre (deployment)?
-5. Hvilke dagsgrenser vil du ha for utsending i starten? `.env.example` har 10 per dag som plassholder.
-6. Hva skjer hvis noen på `DO_NOT_CONTACT` krever sletting? Nå nektes sletting for at vi ikke skal kontakte dem igjen. Alternativet er en minimal sperreliste med org.nr og domene.
-7. Skal `QUALIFIED` kreve en minimumsscore? Nå kreves bare at en score finnes. Under 40 er "ikke prioriter" i reglene, men kan fortsatt settes til `QUALIFIED` manuelt.
+2. Mailutkast: forslag er å la utkastene ligge i Gmail-utkast, så du leser og godkjenner dem i vanlig innboks. Databasen logger bare mottaker, tidspunkt, status og message ID. Samme løsning som i dag. Gjelder hvis du ikke sier noe annet.
+3. Hva skal dashboardet bygges med, og hvor skal det kjøre (deployment)?
+4. Hvilke dagsgrenser vil du ha for utsending i starten? `.env.example` har 10 per dag som plassholder.
+5. `DO_NOT_CONTACT` og sletting. En bedrift ber oss slutte å kontakte dem. Senere ber de om at alt om dem slettes. Nå nekter systemet å slette dem, fordi raden er sperren som hindrer ny kontakt via en annen kilde. Forslag: behold bare en minimal sperre (org.nr og domene), slett resten.
+6. Minimumsscore for `QUALIFIED`. Nå kreves bare at en score finnes, også om den er 25. Forslag: krev 60 eller mer. Leads på 40 til 59 kan løftes manuelt med en kort begrunnelse som logges.
+
+Besluttet: Gmail med Google Workspace som e-postintegrasjon (punkt 2 i forrige liste). Python er beholdt som språk til noe annet er sagt.
