@@ -10,6 +10,12 @@ from dataclasses import dataclass, fields
 from enum import StrEnum
 
 
+# Thresholds for the move to QUALIFIED, enforced by LeadRepository.change_status.
+# They line up with the priority bands below (GOOD_CANDIDATE and LOWER_PRIORITY).
+MIN_SCORE_QUALIFIED = 60  # this score or higher passes
+MIN_SCORE_MANUAL_OVERRIDE = 40  # from here up to 59 a named human can lift a lead with a logged reason
+
+
 class Priority(StrEnum):
     HIGH_PRIORITY = "HIGH_PRIORITY"  # 80-100
     GOOD_CANDIDATE = "GOOD_CANDIDATE"  # 60-79

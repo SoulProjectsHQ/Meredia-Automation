@@ -6,7 +6,7 @@ from src.crm.db import SCHEMA_PATH, connect, init_db
 from src.crm.models import InteractionKind, LeadStatus
 from src.email.status import EmailKind, EmailStatus
 
-TABLES = {"company", "contact", "lead", "interaction", "email", "task", "research_source"}
+TABLES = {"company", "contact", "lead", "interaction", "email", "task", "research_source", "suppression"}
 
 
 class SchemaTests(unittest.TestCase):
@@ -72,6 +72,29 @@ class SchemaTests(unittest.TestCase):
             (lead,),
         )
         self.assertEqual(self.conn.execute("SELECT status FROM email").fetchone()[0], "DRAFT")
+
+    def test_suppression_needs_at_least_one_identifier(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute("INSERT INTO suppression (confirmed_by) VALUES ('Aleksander')")
+        for column in ("organization_number", "domain", "name_key"):
+            with self.subTest(column=column):
+                self.conn.execute(f"INSERT INTO suppression ({column}, confirmed_by) VALUES ('x', 'Aleksander')")
+                self.conn.execute("DELETE FROM suppression")
+
+    def test_suppression_needs_confirmed_by(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute("INSERT INTO suppression (domain) VALUES ('eksempel.no')")
+
+    def test_suppression_identifiers_are_unique_but_null_repeats(self):
+        self.conn.execute("INSERT INTO suppression (organization_number, confirmed_by) VALUES ('912345678', 'A')")
+        self.conn.execute("INSERT INTO suppression (domain, confirmed_by) VALUES ('eksempel.no', 'A')")
+        self.conn.execute("INSERT INTO suppression (name_key, confirmed_by) VALUES ('eksempel', 'A')")
+        taken = (("organization_number", "912345678"), ("domain", "eksempel.no"), ("name_key", "eksempel"))
+        for column, value in taken:
+            with self.subTest(column=column):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    self.conn.execute(f"INSERT INTO suppression ({column}, confirmed_by) VALUES (?, 'B')", (value,))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM suppression").fetchone()[0], 3)
 
 
 class SchemaMatchesCodeTests(unittest.TestCase):

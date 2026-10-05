@@ -1,3 +1,4 @@
+import sqlite3
 import unittest
 from datetime import date, datetime
 
@@ -8,8 +9,10 @@ from src.crm.repository import (
     LeadNotFoundError,
     LeadRepository,
     LeadValidationError,
+    SuppressedLeadError,
 )
 from src.email.status import EmailKind, EmailRecord, EmailStatus, approve, mark_sent
+from src.scoring.lead_score import MIN_SCORE_MANUAL_OVERRIDE, MIN_SCORE_QUALIFIED, Priority, classify
 from tests.test_validation import valid_org_number
 
 NOW = datetime(2026, 10, 6, 9, 30)
@@ -230,6 +233,138 @@ class StatusTests(unittest.TestCase):
             self.repo.change_status(lead_id, S.LOST)
 
 
+class QualifiedThresholdTests(unittest.TestCase):
+    """The score threshold applies only at the move to QUALIFIED."""
+
+    def researched(self, score):
+        repo = new_repo()
+        lead_id = repo.add_lead(sample_lead(lead_score=score))
+        repo.change_status(lead_id, S.RESEARCHED)
+        return repo, lead_id
+
+    def status(self, repo, lead_id):
+        return repo.get_lead(lead_id).lead.lead_status
+
+    def test_constants_match_the_priority_bands(self):
+        self.assertEqual(MIN_SCORE_QUALIFIED, 60)
+        self.assertEqual(MIN_SCORE_MANUAL_OVERRIDE, 40)
+        self.assertEqual(classify(MIN_SCORE_QUALIFIED), Priority.GOOD_CANDIDATE)
+        self.assertEqual(classify(MIN_SCORE_QUALIFIED - 1), Priority.LOWER_PRIORITY)
+        self.assertEqual(classify(MIN_SCORE_MANUAL_OVERRIDE), Priority.LOWER_PRIORITY)
+        self.assertEqual(classify(MIN_SCORE_MANUAL_OVERRIDE - 1), Priority.DO_NOT_PRIORITIZE)
+
+    def test_60_and_above_passes_without_override(self):
+        for score in (60, 61, 100):
+            with self.subTest(score=score):
+                repo, lead_id = self.researched(score)
+                self.assertEqual(repo.change_status(lead_id, S.QUALIFIED).lead.lead_status, S.QUALIFIED)
+                self.assertEqual(repo.list_interactions(lead_id), [])
+
+    def test_40_to_59_fails_without_override(self):
+        for score in (40, 59):
+            with self.subTest(score=score):
+                repo, lead_id = self.researched(score)
+                with self.assertRaises(LeadValidationError):
+                    repo.change_status(lead_id, S.QUALIFIED)
+                self.assertEqual(self.status(repo, lead_id), S.RESEARCHED)
+                self.assertEqual(repo.list_interactions(lead_id), [])
+
+    def test_40_to_59_passes_with_reason_and_named_human(self):
+        for score in (40, 59):
+            with self.subTest(score=score):
+                repo, lead_id = self.researched(score)
+                stored = repo.change_status(
+                    lead_id, S.QUALIFIED, override_reason="God bransjepasning", overridden_by="Aleksander"
+                )
+                self.assertEqual(stored.lead.lead_status, S.QUALIFIED)
+
+    def test_override_is_logged_as_one_note(self):
+        repo, lead_id = self.researched(52)
+        repo.change_status(
+            lead_id, S.QUALIFIED, override_reason="  Kjent\nreferanse,  \n god match ", overridden_by=" Aleksander "
+        )
+        [note] = repo.list_interactions(lead_id)
+        self.assertEqual(note["kind"], InteractionKind.NOTE.value)
+        summary = note["summary"]
+        self.assertNotIn("\n", summary)
+        self.assertIn("Aleksander", summary)
+        self.assertIn("52", summary)
+        self.assertIn("Kjent referanse, god match", summary)
+        self.assertIsNone(repo.get_lead(lead_id).lead.last_contact_date)  # a note is not contact
+
+    def test_override_needs_a_reason(self):
+        for reason in (None, "", "   "):
+            with self.subTest(reason=reason):
+                repo, lead_id = self.researched(50)
+                with self.assertRaises(LeadValidationError):
+                    repo.change_status(lead_id, S.QUALIFIED, override_reason=reason, overridden_by="Aleksander")
+                self.assertEqual(self.status(repo, lead_id), S.RESEARCHED)
+                self.assertEqual(repo.list_interactions(lead_id), [])
+
+    def test_override_needs_a_named_human(self):
+        for who in (None, "", "  ", "ai", "system", "Claude"):
+            with self.subTest(who=who):
+                repo, lead_id = self.researched(50)
+                with self.assertRaises(ValueError):
+                    repo.change_status(lead_id, S.QUALIFIED, override_reason="God match", overridden_by=who)
+                self.assertEqual(self.status(repo, lead_id), S.RESEARCHED)
+                self.assertEqual(repo.list_interactions(lead_id), [])
+
+    def test_under_40_never_passes_not_even_with_override(self):
+        for score in (39, 0):
+            with self.subTest(score=score):
+                repo, lead_id = self.researched(score)
+                for kwargs in ({}, {"override_reason": "God match", "overridden_by": "Aleksander"}):
+                    with self.assertRaises(LeadValidationError):
+                        repo.change_status(lead_id, S.QUALIFIED, **kwargs)
+                self.assertEqual(self.status(repo, lead_id), S.RESEARCHED)
+                self.assertEqual(repo.list_interactions(lead_id), [])
+
+    def test_missing_score_still_fails_not_even_with_override(self):
+        repo, lead_id = self.researched(None)
+        for kwargs in ({}, {"override_reason": "God match", "overridden_by": "Aleksander"}):
+            with self.assertRaises(LeadValidationError):
+                repo.change_status(lead_id, S.QUALIFIED, **kwargs)
+        self.assertEqual(self.status(repo, lead_id), S.RESEARCHED)
+
+    def test_override_arguments_for_other_targets_raise(self):
+        repo, lead_id = self.researched(72)
+        repo.change_status(lead_id, S.QUALIFIED)
+        for kwargs in (
+            {"override_reason": "God match"},
+            {"overridden_by": "Aleksander"},
+            {"override_reason": "God match", "overridden_by": "Aleksander"},
+        ):
+            for target in (S.READY_TO_CONTACT, S.LOST):
+                with self.subTest(target=target, kwargs=kwargs):
+                    with self.assertRaisesRegex(ValueError, "only allowed when moving to QUALIFIED"):
+                        repo.change_status(lead_id, target, **kwargs)
+        self.assertEqual(self.status(repo, lead_id), S.QUALIFIED)
+        self.assertEqual(repo.list_interactions(lead_id), [])
+
+    def test_override_arguments_are_ignored_when_the_score_passes(self):
+        repo, lead_id = self.researched(72)
+        repo.change_status(lead_id, S.QUALIFIED, override_reason="Trengs ikke", overridden_by="Aleksander")
+        self.assertEqual(self.status(repo, lead_id), S.QUALIFIED)
+        self.assertEqual(repo.list_interactions(lead_id), [])
+
+    def test_status_and_note_are_one_transaction(self):
+        repo, lead_id = self.researched(50)
+        repo.conn.execute(
+            "CREATE TRIGGER no_notes BEFORE INSERT ON interaction BEGIN SELECT RAISE(ABORT, 'no notes'); END"
+        )
+        with self.assertRaises(sqlite3.DatabaseError):
+            repo.change_status(lead_id, S.QUALIFIED, override_reason="God match", overridden_by="Aleksander")
+        self.assertEqual(self.status(repo, lead_id), S.RESEARCHED)
+
+    def test_threshold_is_only_checked_at_the_move_to_qualified(self):
+        repo, lead_id = self.researched(72)
+        repo.change_status(lead_id, S.QUALIFIED)
+        repo.update_lead(lead_id, {"lead_score": 45})  # a later score change does not demote the lead
+        stored = repo.change_status(lead_id, S.READY_TO_CONTACT)  # still only score present and verified email
+        self.assertEqual(stored.lead.lead_status, S.READY_TO_CONTACT)
+
+
 class InteractionTests(unittest.TestCase):
     def setUp(self):
         self.repo = new_repo()
@@ -376,13 +511,23 @@ class DeleteTests(unittest.TestCase):
         self.assertEqual(self.count("company"), 1)
         self.assertEqual(self.count("lead"), 1)
 
-    def test_do_not_contact_is_never_deleted(self):
+    def test_do_not_contact_lead_is_deleted_and_leaves_a_suppression(self):
         self.repo.change_status(self.lead_id, S.DO_NOT_CONTACT)
-        with self.assertRaises(ValueError):
-            self.repo.delete_lead(self.lead_id, "Aleksander")
-        self.assertEqual(self.count("lead"), 1)
-        with self.assertRaises(DuplicateLeadError):
+        result = self.repo.delete_lead(self.lead_id, "Aleksander")
+        self.assertTrue(result.suppressed)
+        self.assertTrue(result.company_deleted)
+        for table in ("lead", "company", "contact", "interaction", "task", "research_source"):
+            with self.subTest(table=table):
+                self.assertEqual(self.count(table), 0)
+        self.assertEqual(self.count("suppression"), 1)
+        # The company can not come back from another source, and this is not a duplicate case
+        with self.assertRaises(SuppressedLeadError):
             self.repo.add_lead(sample_lead())
+
+    def test_ordinary_delete_is_not_suppressed(self):
+        result = self.repo.delete_lead(self.lead_id, "Aleksander")
+        self.assertFalse(result.suppressed)
+        self.assertEqual(self.count("suppression"), 0)
 
     def test_delete_unknown_lead(self):
         with self.assertRaises(LeadNotFoundError):

@@ -92,3 +92,19 @@ CREATE TABLE IF NOT EXISTS research_source (
     retrieved_at TEXT NOT NULL,
     note         TEXT
 );
+
+-- Do-not-contact list. A row is written when a DO_NOT_CONTACT lead is deleted, so the same
+-- company is not added again from another source. Identifiers only: no contact person, notes,
+-- emails or sources. name_key is the normalized company name (see normalize_company_name).
+CREATE TABLE IF NOT EXISTS suppression (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    organization_number TEXT,
+    domain              TEXT,
+    name_key            TEXT,
+    confirmed_by        TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (organization_number IS NOT NULL OR domain IS NOT NULL OR name_key IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_suppression_org ON suppression (organization_number);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_suppression_domain ON suppression (domain);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_suppression_name ON suppression (name_key);

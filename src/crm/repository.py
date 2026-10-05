@@ -1,9 +1,12 @@
 """Lead repository on top of SQLite. All CRM reads and writes go through here.
 
 Rules enforced here, not left to callers:
-- new leads are validated, must start as NEW and are checked for duplicates first
-- status changes only go through src.crm.status.transition
-- deleting customer data needs a named human and never touches DO_NOT_CONTACT leads
+- new leads are validated, must start as NEW and are checked against the suppression list and
+  for duplicates first
+- status changes only go through src.crm.status.transition, and QUALIFIED needs a score of
+  MIN_SCORE_QUALIFIED or a logged manual override by a named human
+- deleting customer data needs a named human. Deleting a DO_NOT_CONTACT lead first writes a
+  minimal suppression row (identifiers only), so the company is not added again
 """
 
 from __future__ import annotations
@@ -14,11 +17,12 @@ from datetime import date, datetime
 from typing import Mapping
 
 from src.crm.approval import require_human_approver
-from src.crm.dedupe import find_duplicate
+from src.crm.dedupe import find_duplicate, normalize_company_name
 from src.crm.models import InteractionKind, Lead, LeadStatus, ResearchSource
 from src.crm.status import transition
 from src.crm.validation import normalize_domain, normalize_org_number, validate_lead
 from src.email.status import EmailKind, EmailRecord, EmailStatus
+from src.scoring.lead_score import MIN_SCORE_MANUAL_OVERRIDE, MIN_SCORE_QUALIFIED
 
 
 class LeadValidationError(ValueError):
@@ -34,6 +38,17 @@ class DuplicateLeadError(Exception):
         self.existing_lead_id = existing_lead_id
 
 
+class SuppressedLeadError(Exception):
+    """The company is on the suppression list. Not a duplicate: the lead was deleted on request.
+
+    matched_on uses the same names as DuplicateLeadError: organization_number, domain, company_name.
+    """
+
+    def __init__(self, matched_on: str) -> None:
+        super().__init__(f"Company is on the suppression list (matched on {matched_on})")
+        self.matched_on = matched_on
+
+
 class LeadNotFoundError(LookupError):
     pass
 
@@ -47,18 +62,40 @@ class StoredLead:
 
 @dataclass(frozen=True)
 class DeletionResult:
-    """Receipt for the caller to log. Holds ids only, no personal data."""
+    """Receipt for the caller to log. Holds ids only, no personal data.
+
+    suppressed is True when the lead was DO_NOT_CONTACT, so its identifiers are on the suppression list.
+    """
 
     lead_id: int
     company_deleted: bool
     confirmed_by: str
     deleted_at: datetime
+    suppressed: bool = False
+
+
+@dataclass(frozen=True)
+class Suppression:
+    """One entry on the suppression list. Identifiers only, no personal data."""
+
+    suppression_id: int
+    organization_number: str | None
+    domain: str | None
+    name_key: str | None
+    confirmed_by: str
+    created_at: datetime
 
 
 _UPDATABLE_FIELDS = frozenset(f.name for f in fields(Lead)) - {"lead_status"}
 _COMPANY_FIELDS = ("company_name", "organization_number", "website", "industry", "employee_count", "location")
 _CONTACT_FIELDS = ("contact_name", "contact_role", "contact_email", "contact_email_verified")
 _NO_CONTACT_KINDS = frozenset({InteractionKind.NOTE})
+# (matched_on as in DuplicateLeadError, column in the suppression table), strongest identifier first
+_SUPPRESSION_KEYS = (
+    ("organization_number", "organization_number"),
+    ("domain", "domain"),
+    ("company_name", "name_key"),
+)
 
 _SELECT_LEADS = """
 SELECT l.id AS lead_id, l.company_id, l.status, l.score, l.source,
@@ -115,6 +152,15 @@ def _row_to_stored(row: sqlite3.Row) -> StoredLead:
     return StoredLead(lead_id=row["lead_id"], company_id=row["company_id"], lead=lead)
 
 
+def _suppression_identifiers(lead: Lead) -> tuple[str | None, str | None, str | None]:
+    """Organization number, domain and name key of a lead, normalized. None where unusable."""
+    return (
+        normalize_org_number(lead.organization_number),
+        normalize_domain(lead.website),
+        normalize_company_name(lead.company_name),
+    )
+
+
 def _status_problems(lead: Lead, status: LeadStatus) -> list[str]:
     """Data a lead must have to be in a given status. Plain checks, no LLM."""
     problems: list[str] = []
@@ -142,6 +188,7 @@ class LeadRepository:
         if problems:
             raise LeadValidationError(problems)
 
+        self._check_not_suppressed(*_suppression_identifiers(lead))
         stored = self.list_leads()
         match = find_duplicate(lead, [s.lead for s in stored])
         if match:
@@ -221,6 +268,11 @@ class LeadRepository:
             raise LeadValidationError(problems)
 
         if {"organization_number", "website", "company_name"} & changes.keys():
+            # Only identifiers that actually change are checked against the suppression list, so
+            # unrelated edits never trip over the company's own identity.
+            before = _suppression_identifiers(current.lead)
+            after = _suppression_identifiers(merged)
+            self._check_not_suppressed(*(new if new != old else None for new, old in zip(after, before)))
             others = [s for s in self.list_leads() if s.lead_id != lead_id]
             match = find_duplicate(merged, [s.lead for s in others])
             if match:
@@ -265,32 +317,83 @@ class LeadRepository:
             )
         return self.get_lead(lead_id)
 
-    def change_status(self, lead_id: int, target: LeadStatus) -> StoredLead:
-        """Move a lead to a new status. Only allowed transitions, and the data must be in place."""
+    def change_status(
+        self,
+        lead_id: int,
+        target: LeadStatus,
+        *,
+        override_reason: str | None = None,
+        overridden_by: str | None = None,
+    ) -> StoredLead:
+        """Move a lead to a new status. Only allowed transitions, and the data must be in place.
+
+        QUALIFIED needs a score of MIN_SCORE_QUALIFIED or more. A score from MIN_SCORE_MANUAL_OVERRIDE
+        up to just below that passes only with a non-empty override_reason and a named human in
+        overridden_by. The override is logged as a NOTE on the lead in the same transaction. Lower
+        scores never pass, and a missing score fails. Override arguments are ignored when the score
+        already passes. Passing them for any other target raises ValueError.
+        """
+        if target != LeadStatus.QUALIFIED and (override_reason is not None or overridden_by is not None):
+            raise ValueError("override_reason and overridden_by are only allowed when moving to QUALIFIED")
+
         current = self.get_lead(lead_id)
         transition(current.lead.lead_status, target)
         problems = _status_problems(current.lead, target)
+
+        score = current.lead.lead_score
+        override_note: str | None = None
+        needs_override = target == LeadStatus.QUALIFIED and score is not None and score < MIN_SCORE_QUALIFIED
+        if needs_override and score < MIN_SCORE_MANUAL_OVERRIDE:
+            problems.append(
+                f"score {score} is below {MIN_SCORE_MANUAL_OVERRIDE}, QUALIFIED is not possible,"
+                " not even with an override"
+            )
+        elif needs_override and not (override_reason or "").strip():
+            problems.append(
+                f"score {score} is below {MIN_SCORE_QUALIFIED}, QUALIFIED needs an override_reason"
+                " and a named human in overridden_by"
+            )
         if problems:
             raise LeadValidationError(problems)
+
+        if needs_override:
+            approver = require_human_approver(overridden_by)
+            reason = " ".join(override_reason.split())  # one line in the log
+            override_note = (
+                f"Manuell overstyring til QUALIFIED av {approver}: score {score} er under"
+                f" {MIN_SCORE_QUALIFIED}. Begrunnelse: {reason}"
+            )
+
         with self.conn:
             self.conn.execute(
                 "UPDATE lead SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (target.value, lead_id)
             )
+            if override_note is not None:
+                self._insert_interaction(lead_id, InteractionKind.NOTE, datetime.now(), override_note)
         return self.get_lead(lead_id)
 
     def delete_lead(self, lead_id: int, confirmed_by: str, now: datetime | None = None) -> DeletionResult:
         """Delete a lead and its interactions, emails and tasks. A control point: needs a named human.
 
         The company and its contacts and sources go too, unless the company has other leads.
-        DO_NOT_CONTACT leads are never deleted. They are the record that stops us from
-        contacting the company again.
+        A DO_NOT_CONTACT lead leaves a minimal suppression row behind (organization number, domain
+        and name key, nothing else), written in the same transaction, so the company is not added
+        again from another source. If such a lead has none of the three identifiers, nothing is
+        deleted and ValueError is raised. Deleting any other lead creates no suppression.
         """
         approver = require_human_approver(confirmed_by)
         current = self.get_lead(lead_id)
-        if current.lead.lead_status == LeadStatus.DO_NOT_CONTACT:
-            raise ValueError("DO_NOT_CONTACT leads cannot be deleted, they prevent renewed contact")
+        suppress = current.lead.lead_status == LeadStatus.DO_NOT_CONTACT
+        identifiers = _suppression_identifiers(current.lead)
+        if suppress and not any(identifiers):
+            raise ValueError(
+                "DO_NOT_CONTACT lead has no organization number, domain or usable company name,"
+                " so no suppression can be recorded. Nothing was deleted"
+            )
 
         with self.conn:
+            if suppress:
+                self._add_suppression(identifiers, approver)
             self.conn.execute("DELETE FROM lead WHERE id = ?", (lead_id,))
             remaining = self.conn.execute(
                 "SELECT COUNT(*) FROM lead WHERE company_id = ?", (current.company_id,)
@@ -298,7 +401,23 @@ class LeadRepository:
             company_deleted = remaining == 0
             if company_deleted:
                 self.conn.execute("DELETE FROM company WHERE id = ?", (current.company_id,))
-        return DeletionResult(lead_id, company_deleted, approver, now or datetime.now())
+        return DeletionResult(lead_id, company_deleted, approver, now or datetime.now(), suppressed=suppress)
+
+    # -- suppression list ----------------------------------------------------
+
+    def list_suppressions(self) -> list[Suppression]:
+        rows = self.conn.execute("SELECT * FROM suppression ORDER BY id").fetchall()
+        return [
+            Suppression(
+                suppression_id=r["id"],
+                organization_number=r["organization_number"],
+                domain=r["domain"],
+                name_key=r["name_key"],
+                confirmed_by=r["confirmed_by"],
+                created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in rows
+        ]
 
     # -- interactions, emails, tasks, sources ------------------------------
 
@@ -309,10 +428,7 @@ class LeadRepository:
         current = self.get_lead(lead_id)
         when = occurred_at or datetime.now()
         with self.conn:
-            interaction_id = self.conn.execute(
-                "INSERT INTO interaction (lead_id, kind, occurred_at, summary) VALUES (?, ?, ?, ?)",
-                (lead_id, kind.value, when.isoformat(), summary),
-            ).lastrowid
+            interaction_id = self._insert_interaction(lead_id, kind, when, summary)
             last = current.lead.last_contact_date
             if kind not in _NO_CONTACT_KINDS and (last is None or when.date() > last):
                 self.conn.execute(
@@ -433,6 +549,42 @@ class LeadRepository:
         ]
 
     # -- internals ---------------------------------------------------------
+
+    def _insert_interaction(self, lead_id: int, kind: InteractionKind, when: datetime, summary: str | None) -> int:
+        """Plain insert for use inside a caller's transaction. Does not commit."""
+        return self.conn.execute(
+            "INSERT INTO interaction (lead_id, kind, occurred_at, summary) VALUES (?, ?, ?, ?)",
+            (lead_id, kind.value, when.isoformat(), summary),
+        ).lastrowid
+
+    def _on_suppression_list(self, column: str, value: str) -> bool:
+        # column always comes from _SUPPRESSION_KEYS, never from input
+        return self.conn.execute(f"SELECT 1 FROM suppression WHERE {column} = ?", (value,)).fetchone() is not None
+
+    def _check_not_suppressed(
+        self, organization_number: str | None, domain: str | None, name_key: str | None
+    ) -> None:
+        """Raise SuppressedLeadError on the first identifier on the list. Order: org number, domain, name."""
+        for (matched_on, column), value in zip(_SUPPRESSION_KEYS, (organization_number, domain, name_key)):
+            if value is not None and self._on_suppression_list(column, value):
+                raise SuppressedLeadError(matched_on)
+
+    def _add_suppression(self, identifiers: tuple[str | None, str | None, str | None], confirmed_by: str) -> None:
+        """Write identifiers to the suppression list inside a caller's transaction. Does not commit.
+
+        Idempotent: an identifier that is already on the list is not written again, and nothing is
+        inserted when all of them are. The unique indexes would refuse a second copy anyway.
+        """
+        fresh = tuple(
+            value if value is not None and not self._on_suppression_list(column, value) else None
+            for (_, column), value in zip(_SUPPRESSION_KEYS, identifiers)
+        )
+        if not any(fresh):
+            return
+        self.conn.execute(
+            "INSERT INTO suppression (organization_number, domain, name_key, confirmed_by) VALUES (?, ?, ?, ?)",
+            (*fresh, confirmed_by),
+        )
 
     @staticmethod
     def _has_contact_data(lead: Lead) -> bool:
